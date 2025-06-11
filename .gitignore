@@ -1,3 +1,7 @@
+_*.xml
+*-lock.*
+.idea
+
 # Logs
 logs
 *.log
