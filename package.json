@@ -50,7 +50,8 @@
     "link:all": "npm link @fab33/sys-errors",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "get-tree": "tree -a -L 5 --matchdirs --ignore-case --dirsfirst --sort name -I 'node_modules|docs|.aider*|.idea*|_legacy*|.git|*logs*' > all-files-and-directories.txt",
-    "repomix:all": "repomix"
+    "repomix:all": "repomix",
+    "publish": "npm publish --access public"
   },
   "dependencies": {
     "@fab33/fab-errors": "^1.0.3",
