@@ -1,10 +1,12 @@
 /**
  * @file src/logger.ts
  * @description Основной модуль для создания логгеров с фильтрацией по namespace.
- * @version 1.0.5
- * @date 2025-06-11
+ * @version 1.1.1
+ * @date 2025-06-12
  *
  * HISTORY:
+ * v1.1.1 (2025-06-12): Исправлен вызов конструктора pino (pino -> pino.pino) и ошибка типа null для baseLogger.
+ * v1.1.0 (2025-06-12): Добавлена поддержка `console-inline` транспорта через `stream`.
  * v1.0.5 (2025-06-11): Исправлена ошибка TS2305 путем замены типа `ProcessEnv` на `typeof process.env`.
  * v1.0.4 (2025-06-11): Исправлены ошибки линтера (`no-undef`, `no-explicit-any`).
  * v1.0.3 (2025-06-11): Исправлены ошибки типизации (TS2556, TS2349, TS2322) для совместимости с `pino@9+` и строгим `tsc`.
@@ -14,6 +16,7 @@
  */
 
 import pino from 'pino'
+import 'pino-pretty'
 import type { LogLevel, TLogger } from '@fab33/tlogger'
 import { createTransport } from './config.js'
 import { createTransportError } from './errors.js'
@@ -170,13 +173,19 @@ function initializeBaseLogger (env: typeof process.env): pino.Logger {
   if (dependencies.baseLogger) return dependencies.baseLogger
   try {
     const { pino, createTransport } = dependencies
-    const transportConfig = createTransport(env)
+    const transportOrStreamConfig = createTransport(env)
     const options: pino.LoggerOptions = {
       timestamp: true,
-      level: getLevelName(transportConfig.level)
+      level: getLevelName(transportOrStreamConfig.level)
     }
+
+    if (transportOrStreamConfig.stream) {
+      dependencies.baseLogger = pino.pino(options, transportOrStreamConfig.stream)
+      return dependencies.baseLogger
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pinoInstance = (pino as any)(options, transportConfig.transport)
+    const pinoInstance = (pino as any)(options, transportOrStreamConfig.transport)
     if (!pinoInstance) throw new Error('pino() returned null or undefined')
     dependencies.baseLogger = pinoInstance
     return dependencies.baseLogger!

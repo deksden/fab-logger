@@ -1,10 +1,11 @@
 /**
  * @file src/config.ts
  * @description Модуль конфигурации логгера - загрузка настроек и создание транспортов.
- * @version 1.0.3
- * @date 2025-06-11
+ * @version 1.1.0
+ * @date 2025-06-12
  *
  * HISTORY:
+ * v1.1.0 (2025-06-12): Добавлен специальный 'console-inline' транспорт для сред без поддержки воркеров (Next.js RSC).
  * v1.0.3 (2025-06-11): Исправлена ошибка линтера `no-unused-vars`.
  * v1.0.2 (2025-06-11): Исправлены ошибки типов, `map().filter()` заменен на `reduce()`. Добавлены расширения .js в импорты.
  * v1.0.1 (2025-06-11): Исправлены ошибки типов.
@@ -109,7 +110,7 @@ function parseTransportConfigs (env: Record<string, any>): any[] {
       enabled: env[`${prefix}ENABLED`] !== 'false',
       sync: env[`${prefix}SYNC`] === 'true'
     }
-    if (type === 'console') {
+    if (type === 'console' || type === 'console-inline') {
       Object.assign(config, {
         colors: env[`${prefix}COLORS`] !== 'false',
         translateTime: env[`${prefix}TRANSLATE_TIME`] || 'SYS:standard',
@@ -138,9 +139,35 @@ function parseTransportConfigs (env: Record<string, any>): any[] {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createPinoTransports (transportConfigs: any[]): { level: number, transport: DestinationStream } {
-  const { pino, path } = dependencies
+function createPinoTransports (transportConfigs: any[]): {
+  level: number,
+  transport?: DestinationStream,
+  stream?: DestinationStream
+} {
+  const { pino, path, pretty } = dependencies
   const enabledTransports = transportConfigs.filter(t => t.enabled)
+
+  // --- Специальная обработка для `console-inline` ---
+  // Этот транспорт не использует pino.transport() и не создает дочерних процессов,
+  // что делает его совместимым с Next.js RSC и Vercel Functions.
+  const inlineConsoleConfig = enabledTransports.find(t => t.type === 'console-inline')
+  if (inlineConsoleConfig) {
+    console.warn('[FAB_LOGGER INFO] Using "console-inline" transport. Other transports will be ignored.')
+    const prettyStream = pretty({
+      colorize: inlineConsoleConfig.colors,
+      translateTime: inlineConsoleConfig.translateTime,
+      ignore: inlineConsoleConfig.ignore,
+      singleLine: inlineConsoleConfig.singleLine,
+      timestampKey: inlineConsoleConfig.timestampKey,
+      sync: inlineConsoleConfig.sync
+    })
+
+    return {
+      level: getLevelValue(inlineConsoleConfig.level),
+      stream: prettyStream
+    }
+  }
+  // --- Конец специальной обработки ---
 
   const targets = enabledTransports.reduce<TransportTargetOptions[]>((acc, config) => {
     let target: TransportTargetOptions | null = null
@@ -220,14 +247,19 @@ export function loadConfig (env: Record<string, any>): Record<string, any> {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-export function createTransport (env: Record<string, any>): { level: number, transport: DestinationStream } {
+export function createTransport (env: Record<string, any>): {
+  level: number,
+  transport?: DestinationStream,
+  stream?: DestinationStream
+} {
   try {
     const { path } = dependencies
     const config = loadConfig(env)
     if (config.transportConfigs?.length > 0) {
       return createPinoTransports(config.transportConfigs)
     }
-    const legacyTargets = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const legacyTargets: any[] = []
     if (config.consoleOutput) {
       legacyTargets.push({
         level: config.logLevel,

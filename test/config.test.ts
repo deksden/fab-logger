@@ -1,10 +1,11 @@
 /**
  * @file test/config.test.ts
  * @description Тесты модуля конфигурации логгера.
- * @version 1.0.6
- * @date 2025-06-11
+ * @version 1.1.0
+ * @date 2025-06-12
  *
  * HISTORY:
+ * v1.1.0 (2025-06-12): Добавлен тест для `console-inline` транспорта.
  * v1.0.6 (2025-06-11): Удален некорректный тест, проверявший выброс ошибки при создании директории.
  * v1.0.5 (2025-06-11): Исправлена ошибка типизации (TS2322) путем замены `Mock` на `MockInstance` для `vi.spyOn`.
  * v1.0.4 (2025-06-11): Исправлена ошибка типизации (TS2707) для `Mock` в `vitest`.
@@ -107,6 +108,24 @@ describe('(config.ts) Модуль конфигурации логгера', () 
         ],
         dedupe: false
       })
+    })
+
+    test('должен использовать inline-стрим для транспорта console-inline', () => {
+      mockLogger.trace('Тестирование создания inline-транспорта')
+      mockDeps.env = {
+        TRANSPORT1: 'console-inline',
+        TRANSPORT1_LEVEL: 'info',
+        TRANSPORT1_COLORS: 'true'
+      }
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const result = createTransport(mockDeps.env)
+
+      expect(result.stream).toBeDefined()
+      expect(result.transport).toBeUndefined()
+      expect(mockDeps.pretty).toHaveBeenCalledWith(expect.objectContaining({ colorize: true }))
+      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Using "console-inline" transport'))
+      consoleWarnSpy.mockRestore()
     })
 
     test('должен отключить файловый транспорт при ошибке доступа и не падать', () => {

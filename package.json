@@ -1,6 +1,6 @@
 {
   "name": "@fab33/fab-logger",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Unified logging system with configurable transports, namespace filtering, and log levels",
   "type": "module",
   "files": [
