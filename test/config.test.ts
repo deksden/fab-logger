@@ -1,10 +1,12 @@
 /**
  * @file test/config.test.ts
  * @description Тесты модуля конфигурации логгера.
- * @version 1.1.0
+ * @version 1.2.1
  * @date 2025-06-12
  *
  * HISTORY:
+ * v1.2.1 (2025-06-12): Исправлена ошибка линтера 'no-undef' для NodeJS.ProcessEnv.
+ * v1.2.0 (2025-06-12): Тесты полностью переписаны для проверки функции loadConfig после рефакторинга.
  * v1.1.0 (2025-06-12): Добавлен тест для `console-inline` транспорта.
  * v1.0.6 (2025-06-11): Удален некорректный тест, проверявший выброс ошибки при создании директории.
  * v1.0.5 (2025-06-11): Исправлена ошибка типизации (TS2322) путем замены `Mock` на `MockInstance` для `vi.spyOn`.
@@ -15,133 +17,85 @@
  * v1.0.0 (2025-06-11): Начальная версия на TypeScript.
  */
 
-import { afterEach, beforeEach, describe, expect, type MockInstance, test, vi } from 'vitest'
-import type { TLogger } from '@fab33/tlogger'
-import { createLogger } from '../src/logger.js'
-import { createTransport, processFilenameTemplate, setDependencies } from '../src/config.js'
+import { describe, expect, test } from 'vitest'
+import { loadConfig } from '../src/config.js'
 
 describe('(config.ts) Модуль конфигурации логгера', () => {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let mockDeps: any
-  let mockLogger: TLogger
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let consoleErrorSpy: MockInstance<(message?: any, ...optionalParams: any[]) => void>
-
-  beforeEach(() => {
-    mockLogger = createLogger('test:logger:config')
-    vi.setSystemTime(new Date('2024-01-01T12:00:00.000Z'))
-    vi.spyOn(Date, 'now').mockImplementation(() => new Date().getTime())
-    consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
-    const mockStream = { write: vi.fn(), end: vi.fn() }
-    const mockPretty = vi.fn(() => mockStream)
-
-    mockDeps = {
-      fs: {
-        readFileSync: vi.fn(),
-        existsSync: vi.fn().mockReturnValue(true),
-        mkdirSync: vi.fn(),
-        accessSync: vi.fn(),
-        constants: { W_OK: 2 }
-      },
-      path: {
-        join: vi.fn((...args: string[]) => args.join('/')),
-        dirname: vi.fn().mockImplementation((p: string) => p.substring(0, p.lastIndexOf('/')))
-      },
-      pino: {
-        destination: vi.fn(() => mockStream),
-        transport: vi.fn().mockReturnValue({})
-      },
-      pretty: mockPretty,
-      env: {
-        LOG_LEVEL: 'info',
-        LOG_FOLDER: 'test-logs',
-        LOG_FILE_OUTPUT: 'true',
-        LOG_CONSOLE_OUTPUT: 'true'
-      }
+  test('должен корректно парсить несколько транспортов из process.env', () => {
+    const env: typeof process.env = {
+      TRANSPORT1: 'pretty',
+      TRANSPORT1_LEVEL: 'debug',
+      TRANSPORT1_SINGLE_LINE: 'true',
+      TRANSPORT2: 'file',
+      TRANSPORT2_FILENAME: 'app.log',
+      TRANSPORT2_LEVEL: 'warn'
     }
-    setDependencies(mockDeps)
-  })
 
-  afterEach(() => {
-    vi.clearAllMocks()
-    vi.useRealTimers()
-    consoleErrorSpy.mockRestore()
-  })
+    const config = loadConfig(env)
 
-  describe('processFilenameTemplate()', () => {
-    test('должен корректно обрабатывать шаблоны в имени файла', () => {
-      mockLogger.trace('Тестирование обработки шаблонов')
-      mockDeps.fs.readFileSync.mockReturnValue('{"name": "test-app", "version": "1.2.3"}')
-
-      const templates = {
-        '{app_name}.log': 'test-app.log',
-        '{app_name}_{date}.log': 'test-app_2024-01-01.log'
-      }
-
-      for (const [template, expected] of Object.entries(templates)) {
-        const result = processFilenameTemplate(template)
-        expect(result).toBe(expected)
-      }
+    expect(config.transportsConfig).toHaveLength(2)
+    expect(config.transportsConfig?.[0]).toEqual({
+      type: 'pretty',
+      level: 'debug',
+      single_line: true, // Имена опций становятся snake_case
+      enabled: true
+    })
+    expect(config.transportsConfig?.[1]).toEqual({
+      type: 'file',
+      level: 'warn',
+      filename: 'app.log',
+      enabled: true
     })
   })
 
-  describe('createTransport()', () => {
-    test('должен использовать pino.transport для новых настроек транспортов', () => {
-      mockLogger.trace('Тестирование создания транспортов через pino.transport')
-      mockDeps.env = {
-        TRANSPORT1: 'console',
-        TRANSPORT1_LEVEL: 'debug',
-        TRANSPORT2: 'file',
-        TRANSPORT2_LEVEL: 'error',
-        TRANSPORT2_FOLDER: '/custom/logs'
-      }
-      mockDeps.fs.readFileSync.mockReturnValue('{"name": "test-app"}')
+  test('должен отключать транспорт, если ENABLED=false', () => {
+    const env: typeof process.env = {
+      TRANSPORT1: 'console',
+      TRANSPORT1_ENABLED: 'false',
+      TRANSPORT2: 'file',
+      TRANSPORT2_LEVEL: 'error'
+    }
 
-      const result = createTransport(mockDeps.env)
+    const config = loadConfig(env)
+    expect(config.transportsConfig).toHaveLength(1)
+    expect(config.transportsConfig?.[0].type).toBe('file')
+  })
 
-      expect(result.level).toBe(20)
-      expect(mockDeps.pino.transport).toHaveBeenCalledWith({
-        targets: [
-          expect.objectContaining({ level: 'debug', target: 'pino-pretty' }),
-          expect.objectContaining({ level: 'error', target: 'pino/file' })
-        ],
-        dedupe: false
-      })
-    })
+  test('должен использовать легаси-переменные, если нет TRANSPORT', () => {
+    const env: typeof process.env = {
+      LOG_CONSOLE_OUTPUT: 'true',
+      LOG_FILE_OUTPUT: 'true',
+      LOG_LEVEL: 'error',
+      LOG_FOLDER: 'legacy-logs'
+    }
+    const config = loadConfig(env)
+    expect(config.transportsConfig).toHaveLength(2)
+    expect(config.transportsConfig?.[0]).toEqual({ type: 'console', level: 'error' })
+    expect(config.transportsConfig?.[1]).toEqual({ type: 'file', level: 'error', folder: 'legacy-logs' })
+  })
 
-    test('должен использовать inline-стрим для транспорта console-inline', () => {
-      mockLogger.trace('Тестирование создания inline-транспорта')
-      mockDeps.env = {
-        TRANSPORT1: 'console-inline',
-        TRANSPORT1_LEVEL: 'info',
-        TRANSPORT1_COLORS: 'true'
-      }
-      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+  test('не должен использовать легаси-переменные, если есть хотя бы один TRANSPORT', () => {
+    const env: typeof process.env = {
+      LOG_CONSOLE_OUTPUT: 'true', // Эта переменная будет проигнорирована
+      TRANSPORT1: 'file',
+      TRANSPORT1_FILENAME: 'only-this.log'
+    }
 
-      const result = createTransport(mockDeps.env)
+    const config = loadConfig(env)
+    expect(config.transportsConfig).toHaveLength(1)
+    expect(config.transportsConfig?.[0].type).toBe('file')
+    expect(config.transportsConfig?.[0].filename).toBe('only-this.log')
+  })
 
-      expect(result.stream).toBeDefined()
-      expect(result.transport).toBeUndefined()
-      expect(mockDeps.pretty).toHaveBeenCalledWith(expect.objectContaining({ colorize: true }))
-      expect(consoleWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Using "console-inline" transport'))
-      consoleWarnSpy.mockRestore()
-    })
-
-    test('должен отключить файловый транспорт при ошибке доступа и не падать', () => {
-      mockLogger.trace('Тестирование отказоустойчивости при ошибке доступа')
-      mockDeps.env = {
-        TRANSPORT1: 'file',
-        TRANSPORT1_FOLDER: '/read-only-dir/logs'
-      }
-      mockDeps.fs.accessSync.mockImplementation(() => { throw new Error('EACCES') })
-
-      const result = createTransport(mockDeps.env)
-      expect(result).toBeDefined()
-      expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('[FAB_LOGGER FATAL]'))
-      expect(mockDeps.pino.transport).toHaveBeenCalledWith(expect.objectContaining({
-        targets: [expect.objectContaining({ target: 'pino-pretty' })]
-      }))
-    })
+  test('должен передавать debugString и logLevel', () => {
+    const env: typeof process.env = {
+      DEBUG: 'app:*,-test',
+      LOG_LEVEL: 'trace'
+    }
+    const config = loadConfig(env)
+    expect(config.debugString).toBe('app:*,-test')
+    expect(config.logLevel).toBe('trace')
   })
 })
+
+// END OF: test/config.test.ts

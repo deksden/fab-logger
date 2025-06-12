@@ -1,7 +1,7 @@
 {
   "name": "@fab33/fab-logger",
-  "version": "1.0.1",
-  "description": "Unified logging system with configurable transports, namespace filtering, and log levels",
+  "version": "2.0.0",
+  "description": "A modern, flexible logging system with a pluggable transport architecture.",
   "type": "module",
   "files": [
     "dist"
@@ -12,21 +12,18 @@
   },
   "keywords": [
     "logging",
+    "logger",
+    "pino",
+    "typescript",
+    "isomorphic",
+    "pluggable",
+    "transport",
     "namespace",
     "debug",
-    "log-levels",
-    "pino",
-    "file-logging",
-    "log-rotation",
-    "console-logging",
-    "structured-logging",
-    "colorized-output",
     "fab-logger",
-    "@fab33",
-    "multiple-transports",
-    "typescript"
+    "@fab33"
   ],
-  "author": "(c) fab33,, by deksden",
+  "author": "(c) fab33, by deksden",
   "license": "MIT",
   "bugs": {
     "url": "https://github.com/deksden/fab-logger/issues"
@@ -39,6 +36,22 @@
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
+    },
+    "./env": {
+      "import": "./dist/env.js",
+      "types": "./dist/env.d.ts"
+    },
+    "./transport/pretty": {
+      "import": "./dist/transports/pretty.js",
+      "types": "./dist/transports/pretty.d.ts"
+    },
+    "./transport/file": {
+      "import": "./dist/transports/file.js",
+      "types": "./dist/transports/file.d.ts"
+    },
+    "./transport/console-simple": {
+      "import": "./dist/transports/console-simple.js",
+      "types": "./dist/transports/console-simple.d.ts"
     }
   },
   "scripts": {
@@ -55,7 +68,7 @@
   },
   "dependencies": {
     "@fab33/fab-errors": "^1.0.3",
-    "@fab33/tlogger": "^1.0.3",
+    "@fab33/tlogger": "^1.1.0",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0"
   },

@@ -1,164 +1,70 @@
 /**
  * @file src/logger.ts
- * @description Основной модуль для создания логгеров с фильтрацией по namespace.
- * @version 1.1.1
+ * @description Ядро логгера. "Чистая" функция для создания инстанса логгера.
+ * @version 2.0.5
  * @date 2025-06-12
  *
  * HISTORY:
- * v1.1.1 (2025-06-12): Исправлен вызов конструктора pino (pino -> pino.pino) и ошибка типа null для baseLogger.
- * v1.1.0 (2025-06-12): Добавлена поддержка `console-inline` транспорта через `stream`.
- * v1.0.5 (2025-06-11): Исправлена ошибка TS2305 путем замены типа `ProcessEnv` на `typeof process.env`.
- * v1.0.4 (2025-06-11): Исправлены ошибки линтера (`no-undef`, `no-explicit-any`).
- * v1.0.3 (2025-06-11): Исправлены ошибки типизации (TS2556, TS2349, TS2322) для совместимости с `pino@9+` и строгим `tsc`.
- * v1.0.2 (2025-06-11): Исправлены ошибки типизации и логики. Удален метод silent(). Добавлены расширения .js в импорты.
- * v1.0.1 (2025-06-11): Исправлены ошибки типизации и логики.
- * v1.0.0 (2025-06-11): Начальная версия на TypeScript.
+ * v2.0.5 (2025-06-12): Исправлены ошибки линтера (удалена неиспользуемая функция, исправлены кавычки и подавлены предупреждения any).
+ * v2.0.4 (2025-06-12): Исправлена логика установки уровня для одного stream-транспорта.
+ * v2.0.3 (2025-06-12): Экспортирован loggerCache для возможности его очистки в тестах.
+ * v2.0.2 (2025-06-12): Исправлена логика в isNamespaceEnabled. Теперь логгер включен по умолчанию, если debugString не передан.
+ * v2.0.1 (2025-06-12): Исправлены ошибки типизации (TS2339, TS2345, TS2769) при работе с pino и union-типом PinoTransport.
+ * v2.0.0 (2025-06-12): BREAKING CHANGE. Полный рефакторинг. createLogger теперь "чистая" и синхронная, принимает готовые транспорты.
+ * v1.1.1 (2025-06-12): Исправлен вызов конструктора pino и ошибка типа null.
  */
 
 import pino from 'pino'
-import 'pino-pretty'
-import type { LogLevel, TLogger } from '@fab33/tlogger'
-import { createTransport } from './config.js'
-import { createTransportError } from './errors.js'
+import type { LoggerOptions, LogLevel, PinoTransport, TLogger } from '@fab33/tlogger'
 
-export const dependencies = {
-  env: process.env,
-  pino,
-  baseLogger: null as pino.Logger | null,
-  createTransport,
-  Date
-}
-
-export function setDependencies (newDependencies: Partial<typeof dependencies>): void {
-  if (dependencies.env !== newDependencies.env) {
-    dependencies.baseLogger = null
-  }
-  Object.assign(dependencies, newDependencies)
-}
-
-function getLevelName (level: number): LogLevel {
-  const levelNames = Object.entries(pino.levels.values).reduce((acc, [key, value]) => {
-    acc[value] = key as LogLevel
-    return acc
-  }, {} as Record<number, LogLevel>)
-  return levelNames[level] || 'info'
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function prepareValueForLogging (value: any, depth = 8, maxStringLength = 0, truncationMarker = '...'): any {
-  if (typeof value === 'string' && maxStringLength > 0 && value.length > maxStringLength) {
-    return value.substring(0, maxStringLength) + truncationMarker
-  }
-  if (value instanceof Map) {
-    if (depth <= 0) return '[Max Map Depth Reached]'
-    const obj: Record<string, unknown> = {}
-    for (const [k, v] of value.entries()) {
-      obj[String(k)] = prepareValueForLogging(v, depth - 1, maxStringLength, truncationMarker)
-    }
-    return obj
-  }
-  if (Array.isArray(value)) {
-    return value.map(item => prepareValueForLogging(item, depth, maxStringLength, truncationMarker))
-  }
-  if (value && typeof value === 'object' && !(value instanceof Error) && Object.getPrototypeOf(value) === Object.prototype) {
-    const result: Record<string, unknown> = {}
-    for (const [k, v] of Object.entries(value)) {
-      result[k] = prepareValueForLogging(v, depth, maxStringLength, truncationMarker)
-    }
-    return result
-  }
-  return value
-}
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function wrapLogMethod (pinoInstance: pino.Logger, method: LogLevel): (...args: any[]) => void {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return function (...args: any[]): void {
-    if (args.length === 0) return
-
-    const maxDepth = parseInt(dependencies.env.LOG_MAX_DEPTH ?? '8', 10)
-    const maxStringLength = parseInt(dependencies.env.LOG_MAX_STRING_LENGTH ?? '0', 10)
-    const truncationMarker = dependencies.env.LOG_TRUNCATION_MARKER ?? '...'
-    const firstArg = args[0]
-
-    if (firstArg instanceof Error) {
-      return pinoInstance[method]({ err: firstArg })
-    }
-
-    const convertedArgs = args.map((arg) => {
-      if (arg instanceof Error) return arg
-      if (typeof arg === 'object' && arg !== null) {
-        return prepareValueForLogging(arg, maxDepth, maxStringLength, truncationMarker)
-      }
-      if (typeof arg === 'string' && maxStringLength > 0 && arg.length > maxStringLength) {
-        return arg.substring(0, maxStringLength) + truncationMarker
-      }
-      return arg
-    })
-
-    const firstConvertedArg = convertedArgs[0]
-    if (typeof firstConvertedArg === 'object' && firstConvertedArg !== null) {
-      const { err: potentialError, ...rest } = firstConvertedArg
-      if (potentialError instanceof Error) {
-        return pinoInstance[method]({
-          ...rest,
-          err: {
-            message: potentialError.message,
-            stack: potentialError.stack,
-            type: potentialError.constructor.name,
-            code: (potentialError as { code?: string }).code
-          }
-        }, ...convertedArgs.slice(1))
-      }
-      pinoInstance[method](firstConvertedArg, ...convertedArgs.slice(1))
-    } else {
-      pinoInstance[method](firstConvertedArg, ...convertedArgs.slice(1))
-    }
+// Внутренний отладчик для самого логгера
+const debugLog = (message: string, ...args: unknown[]): void => {
+  if (process.env.DEBUG_LOGGER === 'true' || process.env.DEBUG_LOGGER === '*') {
+    console.log(`[FAB_LOGGER_DEBUG] ${message}`, ...args)
   }
 }
 
-function patternToRegExp (pattern: string): RegExp {
-  if (pattern === '*') return /^.*$/
-  const escaped = pattern.replace(/[\\^$.*+?()[\]{}|:]/g, '\\$&')
-  const regexString = '^' + (escaped.endsWith('\\*') ? escaped.slice(0, -2) + '.*' : escaped) + '$'
-  return new RegExp(regexString.replace(/\\\*/g, '.*'))
+// Глобальный кеш для инстансов логгера, чтобы не создавать их повторно с тем же конфигом
+// Экспортирован для возможности очистки в тестах
+export const loggerCache = new Map<string, pino.Logger>()
+
+function isNamespaceEnabled (namespace: string | undefined, debugString: string | undefined): boolean {
+  // Если debugString не предоставлен, все неймспейсы считаются включенными.
+  if (debugString === undefined) return true
+  if (debugString === '*') return true
+
+  const patterns = debugString.split(',').map(p => p.trim()).filter(Boolean)
+  const skips = patterns.filter(p => p.startsWith('-')).map(p => p.substring(1).replace(/\*/g, '.*'))
+  const names = patterns.filter(p => !p.startsWith('-')).map(p => p.replace(/\*/g, '.*'))
+
+  if (!namespace) {
+    return names.some(p => p === '.*') && !skips.some(s => s === '.*')
+  }
+
+  if (skips.some(p => new RegExp(`^${p}$`).test(namespace))) return false
+  return names.some(p => new RegExp(`^${p}$`).test(namespace))
 }
 
-function isNamespaceEnabled (namespace?: string): boolean {
-  const debug = dependencies.env.DEBUG
-  if (debug === undefined || debug === null) return !namespace
-  const trimmedDebug = debug.trim()
-  if (trimmedDebug === '') return !namespace
-
-  const patterns = trimmedDebug.split(',').map(p => p.trim()).filter(Boolean)
-  const skips = patterns.filter(p => p.startsWith('-')).map(p => p.substring(1))
-  const names = patterns.filter(p => !p.startsWith('-'))
-
-  if (!namespace) return names.includes('*') && !skips.includes('*')
-
-  if (skips.some(p => patternToRegExp(p).test(namespace))) return false
-  return names.some(p => patternToRegExp(p).test(namespace))
-}
-
-function _wrapPinoInstance (pinoInstance: pino.Logger, namespace?: string): TLogger {
+function _wrapPinoInstance (pinoInstance: pino.Logger, namespace: string | undefined, debugString: string | undefined): TLogger {
   const wrapper: Partial<TLogger> = {}
   const logLevels: LogLevel[] = ['trace', 'debug', 'info', 'warn', 'error', 'fatal']
 
   logLevels.forEach(level => {
-    if (pinoInstance[level]) {
-      const wrappedLogFn = wrapLogMethod(pinoInstance, level)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (wrapper as any)[level] = (...args: any[]) => {
+      if (!isNamespaceEnabled(namespace, debugString)) return
+      const pinoMethod = pinoInstance[level]
+      // Pino сам разбирает, что ему передали: ошибку, объект или просто строку.
+      // Используем apply для сохранения контекста pinoInstance.
+      // Кастуем args, чтобы TypeScript не ругался на потенциально пустой массив.
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      wrapper[level] = ((...args: any[]) => {
-        if (!isNamespaceEnabled(namespace)) return
-        return wrappedLogFn(...args)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      }) as any
+      pinoMethod.apply(pinoInstance, args as [any, ...any[]])
     }
   })
 
-  wrapper.child = (bindings) => _wrapPinoInstance(pinoInstance.child(bindings), namespace)
+  wrapper.child = (bindings) => _wrapPinoInstance(pinoInstance.child(bindings), namespace, debugString)
   wrapper.bindings = () => pinoInstance.bindings()
-  wrapper.isLevelEnabled = (levelName) => isNamespaceEnabled(namespace) && pinoInstance.isLevelEnabled(levelName)
+  wrapper.isLevelEnabled = (levelName) => isNamespaceEnabled(namespace, debugString) && pinoInstance.isLevelEnabled(levelName)
   Object.defineProperty(wrapper, 'level', {
     get: () => pinoInstance.level as LogLevel,
     set: (newLevel: LogLevel) => { pinoInstance.level = newLevel },
@@ -169,41 +75,74 @@ function _wrapPinoInstance (pinoInstance: pino.Logger, namespace?: string): TLog
   return wrapper as TLogger
 }
 
-function initializeBaseLogger (env: typeof process.env): pino.Logger {
-  if (dependencies.baseLogger) return dependencies.baseLogger
-  try {
-    const { pino, createTransport } = dependencies
-    const transportOrStreamConfig = createTransport(env)
-    const options: pino.LoggerOptions = {
-      timestamp: true,
-      level: getLevelName(transportOrStreamConfig.level)
+/**
+ * Создает экземпляр логгера на основе предоставленной конфигурации.
+ * Эта функция является "чистой" и не имеет сайд-эффектов (не читает process.env).
+ * @param {LoggerOptions} [options={}] - Опции для конфигурации логгера.
+ * @param {string} [namespace] - Неймспейс для данного экземпляра логгера.
+ * @returns {TLogger} Экземпляр логгера.
+ */
+export function createLogger (namespace?: string, options: LoggerOptions = {}): TLogger {
+  const { transports = [], logLevel = 'info', debugString } = options
+
+  // Создаем ключ для кеширования на основе конфигурации
+  const cacheKey = JSON.stringify({ transports, logLevel })
+  let baseLogger = loggerCache.get(cacheKey)
+
+  if (!baseLogger) {
+    debugLog('Creating new pino instance for config:', {
+      logLevel,
+      transports: transports.map(t => ('target' in t ? t.target : 'stream'))
+    })
+
+    const pinoOptions: pino.LoggerOptions = {
+      level: logLevel,
+      timestamp: pino.stdTimeFunctions.isoTime
     }
 
-    if (transportOrStreamConfig.stream) {
-      dependencies.baseLogger = pino.pino(options, transportOrStreamConfig.stream)
-      return dependencies.baseLogger
+    const pinoTransports: PinoTransport[] = transports.filter(t => t.level === undefined || pino.levels.values[t.level] >= pino.levels.values[logLevel])
+
+    // Используем type guard ('stream' in transport) для сужения типа
+    if (pinoTransports.length === 1 && 'stream' in pinoTransports[0]) {
+      const transport = pinoTransports[0]
+      const transportLevelValue = transport.level ? pino.levels.values[transport.level] : 0
+      const globalLevelValue = pino.levels.values[logLevel]
+
+      // Выбираем более строгий (с большим числовым значением) уровень между глобальным и уровнем транспорта
+      const finalLevel = transportLevelValue > globalLevelValue ? transport.level : logLevel
+      const finalPinoOptions = { ...pinoOptions, level: finalLevel }
+
+      // Оптимизация для одного стрима (например, console-simple или pretty)
+      baseLogger = pino.pino(finalPinoOptions, transport.stream)
+    } else if (pinoTransports.length > 0) {
+      // pino.transport ожидает только транспорты с `target`.
+      // Фильтруем массив и используем type guard, чтобы TypeScript был уверен в их типе.
+      const targetBasedTransports = pinoTransports.filter(
+        (t): t is { target: string; options: Record<string, unknown>; level?: LogLevel } => 'target' in t
+      )
+
+      if (targetBasedTransports.length > 0) {
+        baseLogger = pino.pino({
+          ...pinoOptions,
+          transport: {
+            targets: targetBasedTransports
+          }
+        })
+      }
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pinoInstance = (pino as any)(options, transportOrStreamConfig.transport)
-    if (!pinoInstance) throw new Error('pino() returned null or undefined')
-    dependencies.baseLogger = pinoInstance
-    return dependencies.baseLogger!
-  } catch (error: unknown) {
-    const err = error as Error
-    throw createTransportError({ reason: `Failed to initialize base logger: ${err.message}` }, err)
+    if (!baseLogger) {
+      // Fallback, если транспорты не предоставлены или отфильтрованы (например, были только stream-транспорты, но больше одного)
+      debugLog('No valid transports provided or suitable configuration found, falling back to silent logger.')
+      baseLogger = pino.pino({ ...pinoOptions, level: 'silent' })
+    }
+    loggerCache.set(cacheKey, baseLogger)
+  } else {
+    debugLog('Using cached pino instance.')
   }
-}
 
-export function createLogger (namespace?: string): TLogger {
-  try {
-    const basePinoLogger = initializeBaseLogger(dependencies.env)
-    const pinoInstance = namespace ? basePinoLogger.child({ namespace }) : basePinoLogger
-    return _wrapPinoInstance(pinoInstance, namespace)
-  } catch (error) {
-    console.error(`[FAB_LOGGER FATAL ERROR] Logger creation failed for namespace "${namespace}":`, error)
-    throw error
-  }
+  const pinoInstance = namespace ? baseLogger.child({ namespace }) : baseLogger
+  return _wrapPinoInstance(pinoInstance, namespace, debugString)
 }
 
 // END OF: src/logger.ts
